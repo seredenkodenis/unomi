@@ -16,23 +16,17 @@
  */
 package org.apache.unomi.itests;
 
+import org.apache.unomi.api.PartialList;
 import org.apache.unomi.api.Profile;
 import org.apache.unomi.api.ProfileAlias;
 import org.apache.unomi.api.query.Query;
+import org.apache.unomi.api.services.DefinitionsService;
 import org.apache.unomi.api.services.ProfileService;
 import org.apache.unomi.persistence.spi.PersistenceService;
-import org.apache.unomi.api.services.DefinitionsService;
-import org.apache.unomi.api.PartialList;
-import org.apache.unomi.persistence.elasticsearch.*;
-
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertNull;
-import static org.junit.Assert.fail;
+import org.junit.After;
+import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.junit.Before;
-
 import org.ops4j.pax.exam.junit.PaxExam;
 import org.ops4j.pax.exam.spi.reactors.ExamReactorStrategy;
 import org.ops4j.pax.exam.spi.reactors.PerSuite;
@@ -41,12 +35,16 @@ import org.osgi.service.cm.Configuration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.inject.Inject;
 import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Objects;
 import java.util.stream.IntStream;
 
-import javax.inject.Inject;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.fail;
 
 /**
  * An integration test for the profile service
@@ -60,7 +58,8 @@ public class ProfileServiceIT extends BaseIT {
 
     private static final String TEST_PROFILE_ALIAS = "test-profile-alias";
 
-    @Inject @Filter(timeout = 600000)
+    @Inject
+    @Filter(timeout = 600000)
     protected ProfileService profileService;
 
     @Inject
@@ -76,24 +75,30 @@ public class ProfileServiceIT extends BaseIT {
         TestUtils.removeAllProfiles(definitionsService, persistenceService);
     }
 
+    @After
+    public void tearDown() {
+        TestUtils.removeAllProfiles(definitionsService, persistenceService);
+    }
+
     @Test
     public void testProfileDelete() throws Exception {
         Profile profile = new Profile();
         profile.setItemId(TEST_PROFILE_ID);
         profileService.save(profile);
 
-        refreshPersistence();
+        keepTrying("Profile not found in the required time", () -> profileService.load(TEST_PROFILE_ID), Objects::nonNull,
+                DEFAULT_TRYING_TIMEOUT, DEFAULT_TRYING_TRIES);
 
         profileService.addAliasToProfile(profile.getItemId(), TEST_PROFILE_ALIAS, "defaultClientId");
 
-        refreshPersistence();
+        keepTrying("Profile alias not found in the required time", () -> profileService.load(TEST_PROFILE_ALIAS), Objects::nonNull,
+                DEFAULT_TRYING_TIMEOUT, DEFAULT_TRYING_TRIES);
 
         LOGGER.info("Profile saved, now testing profile delete...");
         profileService.delete(TEST_PROFILE_ID, false);
 
-        refreshPersistence();
-
-        assertNull(profileService.load(TEST_PROFILE_ALIAS));
+        waitForNullValue("Profile still present after deletion", () -> profileService.load(TEST_PROFILE_ALIAS), DEFAULT_TRYING_TIMEOUT,
+                DEFAULT_TRYING_TRIES);
 
         LOGGER.info("Profile deleted successfully.");
     }
@@ -116,7 +121,12 @@ public class ProfileServiceIT extends BaseIT {
         profileService.save(profileTwo);
         profileService.save(profileThree);
 
-        Thread.sleep(4000); // Make sure Elastic is updated
+        keepTrying("Profile " + profileIdOne + " not found in the required time", () -> profileService.load(profileIdOne), Objects::nonNull,
+                DEFAULT_TRYING_TIMEOUT, DEFAULT_TRYING_TRIES);
+        keepTrying("Profile " + profileIdTwo + " not found in the required time", () -> profileService.load(profileIdTwo), Objects::nonNull,
+                DEFAULT_TRYING_TIMEOUT, DEFAULT_TRYING_TRIES);
+        keepTrying("Profile " + profileIdThree + " not found in the required time", () -> profileService.load(profileIdThree),
+                Objects::nonNull, DEFAULT_TRYING_TIMEOUT, DEFAULT_TRYING_TRIES);
 
         Query query = new Query();
         query.setLimit(2);
@@ -139,7 +149,8 @@ public class ProfileServiceIT extends BaseIT {
 
     // Relevant only when throwExceptions system property is true
     @Test
-    public void testGetProfileWithWrongScrollerIdThrowException() throws InterruptedException, NoSuchFieldException, IllegalAccessException, IOException {
+    public void testGetProfileWithWrongScrollerIdThrowException()
+            throws InterruptedException, NoSuchFieldException, IllegalAccessException, IOException {
         boolean throwExceptionCurrent = false;
         Configuration elasticSearchConfiguration = configurationAdmin.getConfiguration("org.apache.unomi.persistence.elasticsearch");
         if (elasticSearchConfiguration != null) {
@@ -158,9 +169,9 @@ public class ProfileServiceIT extends BaseIT {
             fail("search method didn't throw when expected");
         } catch (RuntimeException ex) {
             // Should get here since this scenario should throw exception
-        }
-        finally {
-            updateConfiguration(PersistenceService.class.getName(), "org.apache.unomi.persistence.elasticsearch", "throwExceptions", throwExceptionCurrent);
+        } finally {
+            updateConfiguration(PersistenceService.class.getName(), "org.apache.unomi.persistence.elasticsearch", "throwExceptions",
+                    throwExceptionCurrent);
         }
     }
 
@@ -185,17 +196,17 @@ public class ProfileServiceIT extends BaseIT {
             profile.setItemId(profileID);
             profileService.save(profile);
 
-            refreshPersistence();
+            keepTrying("Profile " + profileID + " not found in the required time", () -> profileService.load(profileID), Objects::nonNull,
+                    DEFAULT_TRYING_TIMEOUT, DEFAULT_TRYING_TRIES);
 
             IntStream.range(1, 3).forEach(index -> {
                 final String profileAlias = profileID + "_alias_" + index;
                 profileService.addAliasToProfile(profileID, profileAlias, "clientID");
             });
 
-            refreshPersistence();
+            Profile storedProfile = keepTrying("Profile " + profileID + " not found in the required time",
+                    () -> profileService.load(profileID), Objects::nonNull, DEFAULT_TRYING_TIMEOUT, DEFAULT_TRYING_TRIES);
 
-            Profile storedProfile = profileService.load(profileID);
-            assertNotNull(storedProfile);
             assertEquals(profileID, storedProfile.getItemId());
 
             storedProfile = profileService.load(profileID + "_alias_1");
@@ -212,6 +223,12 @@ public class ProfileServiceIT extends BaseIT {
                 final String profileAlias = profileID + "_alias_" + index;
                 persistenceService.remove(profileAlias, ProfileAlias.class);
             });
+            waitForNullValue("Profile still present after deletion", () -> profileService.load(profileID), DEFAULT_TRYING_TIMEOUT,
+                    DEFAULT_TRYING_TRIES);
+            waitForNullValue("Profile still present after deletion", () -> profileService.load(profileID + "_alias_1"),
+                    DEFAULT_TRYING_TIMEOUT, DEFAULT_TRYING_TRIES);
+            waitForNullValue("Profile still present after deletion", () -> profileService.load(profileID + "_alias_2"),
+                    DEFAULT_TRYING_TIMEOUT, DEFAULT_TRYING_TRIES);
         }
     }
 
