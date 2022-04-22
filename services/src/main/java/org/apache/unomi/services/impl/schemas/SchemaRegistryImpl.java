@@ -105,7 +105,7 @@ public class SchemaRegistryImpl implements SchemaRegistry {
     }
 
     @Override
-    public boolean isValid(Object object, String schemaId) {
+    public boolean isValid(JsonNode jsonNode, String schemaId) {
         String schemaAsString;
         JsonSchema jsonSchema = null;
         try {
@@ -121,7 +121,7 @@ public class SchemaRegistryImpl implements SchemaRegistry {
         }
 
         if (jsonSchema != null) {
-            JsonNode jsonNode = CustomObjectMapper.getObjectMapper().convertValue(object, JsonNode.class);
+
             Set<ValidationMessage> validationMessages = jsonSchema.validate(jsonNode);
             if (validationMessages == null || validationMessages.isEmpty()) {
                 return true;
